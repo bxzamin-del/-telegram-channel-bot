@@ -12,8 +12,15 @@ DATA_FILE = "stats.json"
 
 def telegram(method, data):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-    response = requests.post(url, data=data, timeout=30)
+
+    response = requests.post(
+        url,
+        data=data,
+        timeout=30
+    )
+
     response.raise_for_status()
+
     result = response.json()
 
     if not result.get("ok"):
@@ -23,120 +30,314 @@ def telegram(method, data):
 
 
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return None
 
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if not os.path.exists(DATA_FILE):
+        return {
+            "last_members": None,
+            "daily": {},
+            "weekly": {},
+            "monthly": {}
+        }
+
+    with open(DATA_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    with open(
+        DATA_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
 
 
 def main():
+
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
+        raise RuntimeError(
+            "BOT_TOKEN تنظیم نشده است."
+        )
 
     if not CHANNEL_ID:
-        raise RuntimeError("CHANNEL_ID تنظیم نشده است.")
+        raise RuntimeError(
+            "CHANNEL_ID تنظیم نشده است."
+        )
 
     if not ADMIN_ID:
-        raise RuntimeError("ADMIN_ID تنظیم نشده است.")
+        raise RuntimeError(
+            "ADMIN_ID تنظیم نشده است."
+        )
 
     now = datetime.now(timezone.utc)
 
+    data = load_data()
+
+    # -------------------------
+    # اطلاعات کانال
+    # -------------------------
+
     channel = telegram(
         "getChat",
-        {"chat_id": CHANNEL_ID}
+        {
+            "chat_id": CHANNEL_ID
+        }
     )
 
-    title = channel.get("title", "کانال")
-
-    members = telegram(
-        "getChatMemberCount",
-        {"chat_id": CHANNEL_ID}
+    channel_name = channel.get(
+        "title",
+        "کانال"
     )
 
-    current_count = int(members)
+    # -------------------------
+    # تعداد اعضا
+    # -------------------------
 
-    old = load_data()
+    current_members = int(
+        telegram(
+            "getChatMemberCount",
+            {
+                "chat_id": CHANNEL_ID
+            }
+        )
+    )
 
-    new_members = 0
-    left_members = 0
+    previous_members = data.get(
+        "last_members"
+    )
 
-    if old:
-        previous_count = int(old.get("members", current_count))
+    # -------------------------
+    # محاسبه رشد
+    # -------------------------
 
-        difference = current_count - previous_count
+    growth = 0
 
-        if difference > 0:
-            new_members = difference
-        elif difference < 0:
-            left_members = abs(difference)
+    if previous_members is not None:
+        growth = (
+            current_members
+            - int(previous_members)
+        )
 
+    new_members = max(
+        growth,
+        0
+    )
+
+    left_members = max(
+        -growth,
+        0
+    )
+
+    # -------------------------
+    # تاریخ‌ها
+    # -------------------------
+
+    day_key = now.strftime(
+        "%Y-%m-%d"
+    )
+
+    week_key = now.strftime(
+        "%Y-W%W"
+    )
+
+    month_key = now.strftime(
+        "%Y-%m"
+    )
+
+    daily = data.setdefault(
+        "daily",
+        {}
+    )
+
+    weekly = data.setdefault(
+        "weekly",
+        {}
+    )
+
+    monthly = data.setdefault(
+        "monthly",
+        {}
+    )
+
+    # -------------------------
     # آمار روزانه
-    today = now.strftime("%Y-%m-%d")
+    # -------------------------
 
-    daily = {}
-    weekly = {}
-    monthly = {}
+    if day_key not in daily:
 
-    if old:
-        daily = old.get("daily", {})
-        weekly = old.get("weekly", {})
-        monthly = old.get("monthly", {})
+        daily[day_key] = {
+            "new": 0,
+            "left": 0
+        }
 
-    if today not in daily:
-        daily[today] = 0
+    daily[day_key]["new"] += new_members
 
-    daily[today] += new_members
+    daily[day_key]["left"] += left_members
 
-    week_key = now.strftime("%Y-W%W")
+    # -------------------------
+    # آمار هفتگی
+    # -------------------------
 
     if week_key not in weekly:
-        weekly[week_key] = 0
 
-    weekly[week_key] += new_members
+        weekly[week_key] = {
+            "new": 0,
+            "left": 0
+        }
 
-    month_key = now.strftime("%Y-%m")
+    weekly[week_key]["new"] += new_members
+
+    weekly[week_key]["left"] += left_members
+
+    # -------------------------
+    # آمار ماهانه
+    # -------------------------
 
     if month_key not in monthly:
-        monthly[month_key] = 0
 
-    monthly[month_key] += new_members
+        monthly[month_key] = {
+            "new": 0,
+            "left": 0
+        }
 
-    save_data({
-        "members": current_count,
-        "last_update": now.isoformat(),
-        "daily": daily,
-        "weekly": weekly,
-        "monthly": monthly
-    })
+    monthly[month_key]["new"] += new_members
 
-    report = (
-        f"📊 گزارش کانال\n\n"
-        f"📢 {title}\n\n"
-        f"👥 کل ممبر: {current_count:,}\n\n"
-        f"🟢 عضو جدید: +{new_members}\n"
-        f"🔴 خارج شده: -{left_members}\n"
-        f"📈 رشد خالص: {new_members - left_members:+d}\n\n"
-        f"📅 امروز: +{daily[today]}\n"
-        f"📆 این هفته: +{weekly[week_key]}\n"
-        f"🗓 این ماه: +{monthly[month_key]}\n\n"
-        f"⏰ گزارش بعدی: ۱ ساعت دیگر"
+    monthly[month_key]["left"] += left_members
+
+    # -------------------------
+    # ذخیره
+    # -------------------------
+
+    data["last_members"] = current_members
+
+    data["last_update"] = now.isoformat()
+
+    save_data(data)
+
+    # -------------------------
+    # وضعیت کانال
+    # -------------------------
+
+    if growth >= 20:
+
+        status = "🟢 رشد عالی"
+
+    elif growth > 0:
+
+        status = "🟢 رشد مثبت"
+
+    elif growth == 0:
+
+        status = "🟡 بدون تغییر"
+
+    else:
+
+        status = "🔴 کاهش اعضا"
+
+    # -------------------------
+    # گزارش
+    # -------------------------
+
+    today_new = daily[day_key]["new"]
+
+    today_left = daily[day_key]["left"]
+
+    today_growth = (
+        today_new
+        - today_left
     )
+
+    week_new = weekly[week_key]["new"]
+
+    week_left = weekly[week_key]["left"]
+
+    week_growth = (
+        week_new
+        - week_left
+    )
+
+    month_new = monthly[month_key]["new"]
+
+    month_left = monthly[month_key]["left"]
+
+    month_growth = (
+        month_new
+        - month_left
+    )
+
+    report = f"""
+🤖 گزارش هوشمند کانال
+
+📢 {channel_name}
+
+━━━━━━━━━━━━━━
+
+👥 اعضای فعلی:
+{current_members:,}
+
+🟢 عضو جدید این ساعت:
++{new_members}
+
+🔴 خارج شده این ساعت:
+-{left_members}
+
+📈 رشد خالص:
+{growth:+d}
+
+━━━━━━━━━━━━━━
+
+📅 امروز
+
+🟢 ورود: +{today_new}
+🔴 خروج: -{today_left}
+📈 رشد: {today_growth:+d}
+
+━━━━━━━━━━━━━━
+
+📆 این هفته
+
+🟢 ورود: +{week_new}
+🔴 خروج: -{week_left}
+📈 رشد: {week_growth:+d}
+
+━━━━━━━━━━━━━━
+
+🗓 این ماه
+
+🟢 ورود: +{month_new}
+🔴 خروج: -{month_left}
+📈 رشد: {month_growth:+d}
+
+━━━━━━━━━━━━━━
+
+🚦 وضعیت:
+{status}
+
+⏰ گزارش بعدی: ۱ ساعت دیگر
+"""
+
+    # -------------------------
+    # ارسال تلگرام
+    # -------------------------
 
     telegram(
         "sendMessage",
         {
             "chat_id": ADMIN_ID,
-            "text": report
+            "text": report.strip()
         }
     )
 
-    print("✅ Report sent successfully.")
+    print(
+        "✅ Report sent successfully."
+    )
 
 
 if __name__ == "__main__":
